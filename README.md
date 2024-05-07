@@ -15,4 +15,5 @@ marketing techniques.
 ## Introduction
 BBBC wants to determine which predictive model is best at improving the efficacy of direct mail programs. Their last model, which consisted of 20,000 customers across 
 Northeastern USA that received a copy of the mailing list and a brochure for The History of Florence. Of the 20,000 clients that received the  mailing list, 9.03% purchased the book.
+
 **BBBC wants to maximize the number of clients that buy the book**, and is exploring 3 models that may allow it to do so: linear regression, logistic regression, and SVM.
