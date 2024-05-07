@@ -1,0 +1,912 @@
+---
+title: "Case_Study-2"
+output: html_document
+date: "2024-02-13"
+---
+
+```{r echo=FALSE, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(car)
+library(readxl)
+library(e1071)
+library(ROCR)
+```
+
+## Data
+
+First, let's load both the training and testing data-sets:
+```{r}
+library(readxl)
+BBBC_Test <- read_excel("/Users/evabeyebach/Desktop/BBBC-Test.xlsx")
+View(BBBC_Test)
+
+library(readxl)
+BBBC_Train <- read_excel("/Users/evabeyebach/Desktop/BBBC-Train.xlsx")
+View(BBBC_Train)
+```
+
+# Data Cleaning
+
+Before the data can be analyzed and used in the models, it must be cleaned to ensure that there are no inconsistencies that might affect the accuracy and effectiveness of the models. First, the BBBC_Train data-set will be analyzed and then the BBBC_Test will be analyzed afterwards. Let's analyze the basic structure and composition of the training set:
+```{r}
+dim(BBBC_Train)
+```
+
+```{r}
+str(BBBC_Train)
+```
+
+Of the 12 variables, all 12 are numeric. Let's take a closer look at each variable:
+
+`Choice` represents whether the client purchased the "History of Florence" book, with 1 = purchase, and 0 = not purchased. This variable is the dependent variable for the models and predictions
+`Gender` is symbolized by 0 = Female and 1 = Male
+`Observation` will be used as the ID of each client
+`Amount_purchased` is the amount of money spent on BBBC books
+`Frequency` is the total number of purchases during the set period
+`Last_purchase` & `First_purchase` are the number of months that have passed since the most recent and first ever purchase, respectively
+`P_child`, `P_Youth`, `P_Cook`, `P_DIY`, `P_Art` represent the number of books purchased of each category
+
+Since Gender and Choice are binary variables, they should be converted to factors:
+
+```{r}
+# Changing variables to factor
+BBBC_Train$Gender<- as.factor(BBBC_Train$Gender)
+BBBC_Train$Choice<- as.factor(BBBC_Train$Choice)
+```
+
+
+```{r}
+# Summary of the data
+summary(BBBC_Train)
+```
+
+```{r}
+#lets look at some tables for categorical variables
+table(BBBC_Train$Choice)
+table(BBBC_Train$Gender)
+table(BBBC_Train$Frequency)
+table(BBBC_Train$Last_purchase)
+table(BBBC_Train$First_purchase)
+table(BBBC_Train$P_Child)
+table(BBBC_Train$P_Youth)
+table(BBBC_Train$P_Cook)
+table(BBBC_Train$P_DIY)
+table(BBBC_Train$P_Art)
+```
+
+As we can see from the tables, the data does not seem to have outliers.
+We can see that the data is not properly balanced, 3/4 of the population tend to not pay for the book (Choice:0) rather than pay for it.
+Also, one important think to note for further analysis is that gender is not balanced either (2/3 are classified as 1)
+
+
+```{r}
+#Looking for duplicates
+dups_id <- sum(duplicated(BBBC_Train$Observation))
+print(dups_id)
+```
+There are no duplicate observations in the data set.
+
+```{r}
+# Looking for missing values
+colSums(is.na(BBBC_Train))
+```
+No missing values in dataset.
+
+
+Overall, the data looks clean and good distributed. We only had to change two variables to factor variables.
+The only think to note for further predictions is that the data is not balanced (3/4 of population did not purchase the book).
+
+
+# Data Visuals 
+
+```{r}
+BBBC_TrainV <- BBBC_Train
+BBBC_TrainV$Gender <- ifelse(BBBC_TrainV$Gender==1,"Male","Female")
+BBBC_TrainV$Choice <- ifelse(BBBC_TrainV$Choice==1,"Purchased","Not Purchased")
+```
+
+
+Now that the data is clean, some visuals will be presented to help draw insights on the data and unique characteristics for purchasers and non-purchasers of "The History of Florence". Firstly, let's actually see how many people purchased and did not purchase the book:
+```{r}
+choice_t <- table(BBBC_TrainV$Choice)
+text(x = barplot(table(BBBC_TrainV$Choice),ylab = "Observations",names.arg = c("Not Purchased", "Purchased")), y = choice_t /2, labels = choice_t, pos=3, cex = 1)
+```
+There is a much larger number of clients that did not purchase "The History of Florence" as seen in the bar chart above. 75% of people did not purchase the book and 25% did.
+
+Let's take a look at who these purchasers and non-purchasers are based on the actual data. First's let's analyze whether more males or females purchased the book:
+```{r}
+ggplot(BBBC_TrainV, aes(x=Choice))+
+  geom_bar(aes(fill=Gender),position = "dodge")
+```
+
+It looks as though the distinction between male and female purchasers is very slim, with males slightly edging females. On the other hand, males are much more likely to not purchase the book than females. Let's analyze whether this is due to there being more males than females in the study:
+```{r}
+choice_g <- table(BBBC_TrainV$Gender)
+text(x = barplot(table(BBBC_TrainV$Gender),ylab = "Observations",names.arg = c("Females","Males")), y = choice_g /2, labels = choice_g, pos=3, cex = 1)
+```
+It does appear that there are vastly more males in the data than females. Due to this, there is a large distortion between males and females that did not purchase "The History of Florence".
+
+It would also be helpful to understand the average, min, and max purchase volumes for purchasers and non-purchasers. First, let's analyze purchasers:
+```{r}
+avg_p <- mean(BBBC_Train$Amount_purchased[BBBC_Train$Choice==1])
+max_p <- max(BBBC_Train$Amount_purchased[BBBC_Train$Choice==1])
+min_p <- min(BBBC_Train$Amount_purchased[BBBC_Train$Choice==1])
+
+print(paste("The average purchase volume for purchasers of 'The History of Florence' is:",round(avg_p,2)))
+print(paste("The max purchase volume for purchasers of 'The History of Florence' is:",round(max_p,2)))
+print(paste("The min purchase volume for purchasers of 'The History of Florence' is:",round(min_p,2)))
+```
+
+```{r}
+avg_np <- mean(BBBC_Train$Amount_purchased[BBBC_Train$Choice==0])
+max_np <- max(BBBC_Train$Amount_purchased[BBBC_Train$Choice==0])
+min_np <- min(BBBC_Train$Amount_purchased[BBBC_Train$Choice==0])
+
+print(paste("The average purchase volume for non-purchasers of 'The History of Florence' is:",round(avg_np,2)))
+print(paste("The max purchase volume for non-purchasers of 'The History of Florence' is:",round(max_np,2)))
+print(paste("The min purchase volume for non-purchasers of 'The History of Florence' is:",round(min_np,2)))
+```
+
+Average purchase volume differs the most between purchasers and non-purchasers, with purchasers buying $25.99 more on average. 
+
+```{r}
+BBBC_TrainN <- BBBC_Train %>% select_if(is.numeric)
+
+boxplot(BBBC_TrainN[2:5],names = c("Amount_purchased", "Frequency", "Last_purchase", "First_purchase"))
+```
+The variables `Frequency`, `Last_purchase`, and `First_purchase` have outliers which should be analyzed. First, the frequency variable will be looked at:
+```{r}
+boxplot(BBBC_Train$Frequency)
+```
+There are 3 outliers in the `Frequency` variable that could affect the model's accuracy. Since this variable measures the total number of purchases during a given period, it would be helpful to standardize this variable. Any variables higher than 30 will be converted to 30.
+
+`Last_purchase` variable:
+```{r}
+boxplot(BBBC_Train$Last_purchase)
+```
+These 4 outliers will be standardized as well, since the `Last_purchase` describes how long ago the most recent purchase was. Having a standard and uniform variable will allow the model to better predict if the time since the last purchase is a significant predictor in the model. Any values above will be be converted to 8
+
+`First_purchase` variable:
+```{r}
+boxplot(BBBC_Train$First_purchase)
+```
+There are many outliers in the `First_purchase` that could affect the model's performance. Any value above 57 will be converted to 57
+
+The remaining 5 variables should also be analyzed for outliers:
+
+```{r}
+boxplot(BBBC_TrainN[6:10],names = c("P_Child", "P_Youth", "P_Cook", "P_DIY", "P_Art"))
+```
+Every remaining variable has outliers that should be analyzed and corrected, if needed.
+
+`P_Child` variable:
+```{r}
+boxplot(BBBC_Train$P_Child)
+```
+Outliers above 2 will be converted to 2.
+
+`P_Youth` variable
+```{r}
+boxplot(BBBC_Train$P_Youth)
+```
+Observations above 2 will be converted to 2.
+
+`P_Cook` variable:
+```{r}
+boxplot(BBBC_Train$P_Cook)
+```
+Observations above 2 will be converted to 2.
+
+`P_DIY` variable:
+```{r}
+boxplot(BBBC_Train$P_DIY)
+```
+Observations above 2 will also be converted to 2.
+
+`P_Art` variable:
+```{r}
+boxplot(BBBC_Train$P_Art)
+```
+Observations above 2 will be converted to 2.
+
+The changes will be applied below:
+```{r}
+BBBC_Train$Frequency[BBBC_Train$Frequency > 30] <- 30
+BBBC_Train$Last_purchase[BBBC_Train$Last_purchase > 8] <- 8
+BBBC_Train$First_purchase[BBBC_Train$First_purchase > 57] <- 57
+BBBC_Train$P_Child[BBBC_Train$P_Child > 2] <- 2
+BBBC_Train$P_Cook[BBBC_Train$P_Cook > 2] <- 2
+BBBC_Train$P_Art[BBBC_Train$P_Art > 2] <- 2
+BBBC_Train$P_DIY[BBBC_Train$P_DIY > 2] <- 2
+BBBC_Train$P_Youth[BBBC_Train$P_Youth > 2] <- 2
+BBBC_TrainN <- BBBC_Train %>% select_if(is.numeric)
+boxplot(BBBC_TrainN)
+```
+There are no more outliers to be analyzed and corrected. 
+
+Lastly, it would be interesting to know how often purchasers and non-purchasers of the book actually buy books. A new variable must be added called `Purchase_frequency`. This variable will be created as follows: ((First_purchase - Last_purchase)/Frequency)
+```{r}
+BBBC_TrainV$Purchase_frequency <- round((BBBC_Train$First_purchase - BBBC_Train$Last_purchase)/BBBC_Train$Frequency,2)
+```
+
+```{r}
+avgPF_p <- mean(BBBC_TrainV$Purchase_frequency[BBBC_TrainV$Choice == "Purchased"])
+avgPF_np <- mean(BBBC_TrainV$Purchase_frequency[BBBC_TrainV$Choice == "Not Purchased"])
+
+print(paste("The average purchase frequency for non-purchasers of 'The History of Florence' is:",round(avgPF_np,2)))
+print(paste("The average purchase volume for purchasers of 'The History of Florence' is:",round(avgPF_p,2)))
+```
+
+Overall, purchasers of "The History of Florence buy books at an average of 2.62 weeks, while non-purchasers buy books at an average of 1.77 weeks. 
+
+#Logistic Regresion
+
+Now, it's time see whether a logistic regression model can accurately and effectively predict whether a client will buy ("1") or will not buy the book ("0"). Our Y and dependent variable will be `Choice`.
+The data was already split, so we will use first the training set. 
+We will use all the variables except `Observation`, as it is not important for this analysis.
+
+```{r}
+train_glm <- glm(Choice ~ . - Observation, family = binomial, data = BBBC_Train)
+summary(train_glm)
+```
+
+From this model, we can see that all the variables are significant, except `First_Purchase`. `P_Cook`, has the biggest coefficient, but it is negative. This mean that someone buying the The book will less likely be someone that also bought a cook book. However, someone buying Art books will correlate with someone buying *The Art History of Florence* (0.687).
+
+Lets look for multicollinearity.
+```{r}
+vif(train_glm)
+```
+
+As we can see from this test, `Last_purchase` and `first_purchase` have very high multicollinearity, so we will first delete Last_purchase from the model, as it it the one with the highest multicollineairity.
+
+```{r}
+train_glm2 <- glm(Choice ~ . - Observation - Last_purchase, family =binomial, data = BBBC_Train)
+summary(train_glm2)
+```
+Now, all the variables are significant except p_Youth.
+
+```{r}
+vif(train_glm2)
+```
+`First_Purchase` is still very high, so we will delete it from the model as well.
+
+```{r}
+train_glm <- glm(Choice ~ . - Observation - Last_purchase - First_purchase, family =binomial, data = BBBC_Train)
+summary(train_glm)
+```
+Lets check for multicollinearity.
+
+```{r}
+vif(train_glm)
+```
+Looks like multi-collinearity is no longer an issue! Let's analyze the confusion matrix of the logistic regression model and test its accuracy.
+We will create a new testing set without the variables we deleted for multi-collinearity.
+
+```{r}
+BBBC_Test$Gender <- as.factor(BBBC_Test$Gender)
+pred_log_test <- predict(train_glm, newdata = BBBC_Test, type="response")
+predictions_log <- ifelse(pred_log_test >= 0.5,1,0)
+caret::confusionMatrix(as.factor(predictions_log), as.factor(BBBC_Test$Choice))
+```
+
+From the logistic model we can see that Accuracy is very high, at 89.5%. This model correctly identifies the Sensitivity (People not buying the book), with 94.6%. However, it does not do a good job with predicting Specificity (People buying the book) at 37.3%. The data is heavily skewed to "Non-Purchasers", so this is to be expected.
+
+# Balanced Logistic Regression
+
+As mentioned earlier, the BBBC_Train & BBBC_Test data-sets contain a much larger number of "Non-Purchasers" than "Purchasers". This inequality leads to much lower specificity values that affect the overall accuracy of predicting "Purchasers" of "The History of Florence". To solve this, the training and testing sets will be split into samples with the same number of "Purchasers" (1) & "Non-Purchasers" (0):
+```{r}
+df_ext_cust = BBBC_Train %>% filter(Choice == 0)
+df_att_cust = BBBC_Train %>% filter(Choice == 1)
+set.seed(1)
+sample_ext_cust = sample_n(df_ext_cust, nrow(df_att_cust)) # same number of purchasers and non-purchasers
+df_bal_tr = rbind(df_att_cust,sample_ext_cust)
+
+# Split data into one training set
+set.seed(1)
+tr_ind_bal <- sample(nrow(df_bal_tr),0.8*nrow(df_bal_tr),replace = F) # Setting training sample to be 80% of the data
+BBBC_Train_bal <- df_bal_tr
+table(BBBC_Train_bal$Choice)
+```
+```{r}
+## Resample with more balanced data 
+df_ext_cust = BBBC_Test %>% filter(Choice == 0)
+df_att_cust = BBBC_Test %>% filter(Choice == 1)
+set.seed(2)
+sample_ext_cust = sample_n(df_ext_cust, nrow(df_att_cust)) # same number of existing customers and attrited customers
+df_bal_t = rbind(df_att_cust,sample_ext_cust)
+
+# Split data into training and testing balanced samples
+set.seed(2)
+tr_ind_bal <- sample(nrow(df_bal_t),0.8*nrow(df_bal_t),replace = F) # Setting training sample to be 80% of the data
+BBBC_Test_bal <- df_bal_t
+table(BBBC_Test_bal$Choice) 
+```
+
+With balanced data, a Logistic Regression model can be run that will be impartial to "Purchasers" & "Non-Purchasers". The same logistic regression model that accounts for multi-collinearity will be used:
+
+```{r}
+train_glm_bal <- glm(Choice ~ . - Observation - Last_purchase - First_purchase, family =binomial, data = BBBC_Train_bal)
+summary(train_glm)
+```
+
+```{r}
+pred_log_test_b <- predict(train_glm_bal, newdata = BBBC_Test_bal, type="response")
+predictions_logb <- ifelse(pred_log_test_b >= 0.5,1,0)
+caret::confusionMatrix(as.factor(predictions_logb), as.factor(BBBC_Test_bal$Choice))
+```
+
+The Balanced Logistic Regression has an accuracy of 74%, Sensitivity of 82.4%, and Specificity of 65.7%. These values must be compared to the Unbalanced Logistic Regression values:
+
+Accuracy: 89.5%
+Sensitivity: 94.6%
+Specificity: 37.3%
+
+Accuracy and Sensitivity dropped by 15.5% & 12.2%, respectively. However, specificity increased by 28.4%! These changes are most likely due to the decrease in "Non-Purchasers" and increase of "Purchasers" in the data, which were positively skewing both Accuracy and Sensitivity. In terms of balanced results, the Balanced Logistic Regression model is a much better model.
+
+# Linear Regression
+
+The second method of statistical modeling will be a linear regression model. Linear regression models aim to predict the value of a continuous dependent variable based on its predictors. Since the `Choice` variable in the data-set is binary, this model will undoubtedly run into violations of the model's main assumptions, such as linearity in the dependent variable. However, the linear model should be performed to gauge its aeffectiveness.
+
+Firstly, the linearity assumption should be analyzed:
+```{r}
+plot(BBBC_Train$Amount_purchased, BBBC_Train$Choice,
+     xlab="Amount Purchased", ylab="Choice")
+```
+As seen in the scatter plot, there is no linearity between `Choice` and the predictor variable `Amount Purchased`. No matter what the predictor variable, there will not be linearity in `Choice`, since there are only 2 options: 1 & 0. For this reason, the linear regression model will not be the best way to predict "Purchasers" and "Non-Purchasers" of "The History of Florence". Just like the logistic regression model, the same variables will be used in linear regression, including the removal of `Last_purchase` and `First_purchase` to solve the multi-collinearity, and `Observation` due to its role as the ID variable. Now, for the actual model and results:
+```{r}
+lm.fit.train <- lm(as.numeric(Choice)~. -Observation -Last_purchase - First_purchase, data = BBBC_Train)
+summary(lm.fit.train)
+```
+`Gender1` negatively influences `Choice`, while `Amount_purchased` and `P_Art` positively affect it. `Frequency`, `P_Child`, `P_Cook`, and `P_DIY` are negatively associated with `Choice`. The model explains about 21.14% of the variability in `Choice` as indicated by the R-squared value of 0.2033, which suggests it has limited explanatory power, implying other variables not included might be influencing `Choice`. The Adjusted R-squared is slightly lower, adjusting for the number of predictors and observations. The model's statistical significance is confirmed by a highly significant F-statistic (p-value < 0.05). This information is crucial for understanding how different variables relate to `Choice` and for improving the model's accuracy and predictive power.
+
+The model reveals that every predictor variable is significant except for `P_Youth`. This could mean that whether or not customers purchased or did not purchase Youth books does not influence their decision to buy or not buy "The History of Florence". 
+
+Now, the testing set will be used:
+```{r}
+lm_mse <- mean((lm.fit.train$fitted.values - as.numeric(BBBC_Train$Choice))^2)
+print(paste("The MSE for the Linear Model is:",round(lm_mse,2)))
+```
+Even though the Mean Squared Error of 0.15 is very low, the fact that the predictor variable is binary means that linear regression is inherently an inapropriate way to predict `Choice`, For that reason, linear regression will not be an apt method to derive results and predictions. 
+
+# SVM Model
+
+A Support Vector Machine (SVM) is a type of supervised classification model that aims to separate the data through a hyper-plane. This model is great for classification of a binary variable, since there are two different groups in this data: purchasers and non-purchasers. The SVM model uses support vectors, data points closest to the hyper-plane, to actually define the hyper-plane and separate the data. The closer a data point is to the support vector, the better the data can be separated and classified. 
+
+The two data-sets, BBBC_Train & BBBC_Test, do not need splitting, so the training model will use BBBC_Train and BBBC_Test will be the testing model.
+
+```{r}
+svm_train <- svm(as.factor(Choice) ~. - Observation - Last_purchase - First_purchase, data = BBBC_Train, kernel="linear")
+summary(svm_train)
+```
+To reiterate, the two classification variables are 0="Not Purchased" & 1="Purchased". The SVM model has 774 support vectors and leverages a linear kernel.
+
+Predictions & Confusion Matrix:
+```{r}
+pred_train <- predict(svm_train, BBBC_Train)
+caret::confusionMatrix(as.factor(pred_train), as.factor(BBBC_Train$Choice))
+```
+The training SVM model has an overall accuracy of 79.8%. Sensitivity is very high at 95%, and specificity equal to 34.5%. Due to there being more "Non-Purchases" than "Purchases" in the data, it is clear that the data will be more accurate for "Non-Purchases". Compared to the logistic regression's accuracy of 89.48%, sensitivity of 94.6%, and specificity of 37.3%, the logistic regression is a better model, but this is only based on preliminary numbers.
+
+AUC of Training Data:
+```{r}
+svm_train_prob <- svm(as.factor(Choice) ~. - Observation - Last_purchase - First_purchase, data = BBBC_Train, kernel="linear", probability = TRUE)
+pred_prob <- predict(svm_train_prob, newdata = BBBC_Train, probability = TRUE)
+pred_prob <- attr(pred_prob, "probabilities")[, 1]
+pred <- prediction(pred_prob, BBBC_Train$Choice)
+perf <- performance(pred, "tpr", "fpr")
+plot(perf, colorize=TRUE)
+```
+```{r}
+unlist(slot(performance(pred, "auc"), "y.values"))
+```
+
+The AUC curve of the SVM model is 0.78, revealing that the model accurately fits the data. The same analysis must be performed on the testing model to determine whether the model accurately fits the testing data.
+
+Testing SVM:
+```{r}
+pred_test <- predict(svm_train, BBBC_Test)
+caret::confusionMatrix(as.factor(pred_test), as.factor(BBBC_Test$Choice))
+```
+The overall accuracy of the testing SVM model is 90%, with a sensitivity of 95% and specificity equal to 33.3%. Compared to the training SVM results of:
+
+Accuracy: 89.5%
+Sensitivity: 95%
+Specificity: 34.5%,
+
+The testing set performs better in terms of accuracy, almost 10% more accurate overall. Sensitivity is unchanged at 95%, and specificity declined by 1.2%. The data might be over-fitted in the model, so the AUC curve must be analyzed:
+```{r}
+
+pred_prob_t <- predict(svm_train_prob, newdata = BBBC_Test, probability = TRUE)
+pred_prob_t <- attr(pred_prob_t, "probabilities")[, 1]
+pred <- prediction(pred_prob_t, BBBC_Test$Choice)
+perf <- performance(pred, "tpr", "fpr")
+plot(perf, colorize=TRUE)
+```
+```{r}
+unlist(slot(performance(pred, "auc"), "y.values"))
+```
+The AUC of the testing set is 0.79, .01 higher than the training AUC. This reveals that the model is not over-fitted, and the model is an accurate method for classifying "Purchasers" and "Non-Purchasers" of "The History of Florence".
+
+# SVM Model Polynomial
+
+```{r}
+svm_train_pol <- svm(as.factor(Choice) ~. - Observation - Last_purchase - First_purchase, data = BBBC_Train, kernel="polynomial")
+summary(svm_train_pol)
+```
+This SVM model has 745 support vectors, 353 for "Non-Purchasers" & 392 for "Purchasers".
+
+Predictions & Confusion Matrix:
+```{r}
+pred_train_pol <- predict(svm_train_pol, BBBC_Train)
+caret::confusionMatrix(as.factor(pred_train_pol), as.factor(BBBC_Train$Choice))
+```
+
+AUC of Training Data:
+```{r}
+svm_train_prob_pol <- svm(as.factor(Choice) ~. - Observation - Last_purchase - First_purchase, data = BBBC_Train, kernel="polynomial", probability = TRUE)
+pred_prob_pol <- predict(svm_train_prob_pol, newdata = BBBC_Train, probability = TRUE)
+pred_prob_pol <- attr(pred_prob_pol, "probabilities")[, 1]
+pred_pol <- prediction(pred_prob_pol, BBBC_Train$Choice)
+perf_pol <- performance(pred_pol, "tpr", "fpr")
+plot(perf_pol, colorize=TRUE)
+```
+```{r}
+unlist(slot(performance(pred_pol, "auc"), "y.values"))
+```
+
+
+
+Testing SVM:
+```{r}
+pred_test_pol <- predict(svm_train_pol, BBBC_Test)
+caret::confusionMatrix(as.factor(pred_test_pol), as.factor(BBBC_Test$Choice))
+```
+The overall accuracy of the testing SVM model is 89.78%, with a sensitivity of 95% and specificity equal to 33.3%. Compared to the training SVM results of:
+
+Accuracy: 89.78%
+Sensitivity: 96.42%
+Specificity: 21.57%,
+
+```{r}
+pred_prob_t_pol <- predict(svm_train_prob_pol, newdata = BBBC_Test, probability = TRUE)
+pred_prob_t_pol <- attr(pred_prob_t_pol, "probabilities")[, 1]
+pred_pol_test <- prediction(pred_prob_t_pol, BBBC_Test$Choice)
+perf_pol_test <- performance(pred_pol_test, "tpr", "fpr")
+plot(perf_pol_test, colorize = TRUE)
+```
+
+```{r}
+unlist(slot(performance(pred_pol_test, "auc"), "y.values"))
+```
+
+The testing AUC curve of 74.4% is ~5% lower than the 79.8% AUC of the training set.
+
+# SVM Model sigmoid
+
+```{r}
+svm_train_sig <- svm(as.factor(Choice) ~. - Observation - Last_purchase - First_purchase, data = BBBC_Train, kernel="sigmoid")
+```
+
+Predictions & Confusion Matrix:
+```{r}
+pred_train_sig <- predict(svm_train_sig, BBBC_Train)
+caret::confusionMatrix(as.factor(pred_train_sig), as.factor(BBBC_Train$Choice))
+```
+
+AUC of Training Data:
+```{r}
+svm_train_prob_sig <- svm(as.factor(Choice) ~. - Observation - Last_purchase - First_purchase, data = BBBC_Train, kernel="sigmoid", probability = TRUE)
+pred_prob_sig <- predict(svm_train_prob_sig, newdata = BBBC_Train, probability = TRUE)
+pred_prob_sig <- attr(pred_prob_sig, "probabilities")[, 1]
+pred_sig <- prediction(pred_prob_sig, BBBC_Train$Choice)
+perf_sig <- performance(pred_sig, "tpr", "fpr")
+
+```
+```{r}
+unlist(slot(performance(pred_sig, "auc"), "y.values"))
+```
+Testing SVM:
+```{r}
+pred_test_sig <- predict(svm_train_sig, BBBC_Test)
+caret::confusionMatrix(as.factor(pred_test_sig), as.factor(BBBC_Test$Choice))
+```
+The overall accuracy of the testing SVM model is 89.78%, with a sensitivity of 95% and specificity equal to 33.3%. Compared to the training SVM results of:
+
+Accuracy: 77. 65%
+Sensitivity: 81.01%
+Specificity: 43.14%,
+
+```{r}
+pred_prob_t_sig <- predict(svm_train_prob_sig, newdata = BBBC_Test, probability = TRUE)
+pred_prob_t_sig <- attr(pred_prob_t_sig, "probabilities")[, 1]
+pred_sig_test <- prediction(pred_prob_t_sig, BBBC_Test$Choice)
+perf_sig_test <- performance(pred_sig_test, "tpr", "fpr")
+```
+
+```{r}
+unlist(slot(performance(pred_sig_test, "auc"), "y.values"))
+```
+
+Very low AUC
+In the training it is 0.61 and in the testing 0.65.
+
+# SVM Model RBF
+
+```{r}
+tuned = tune.svm(as.factor(Choice) ~. - Observation - Last_purchase - First_purchase, data = BBBC_Train, gamma = seq(.01, .1, by = .01), cost = seq(.1, 1, by = .1), scale = TRUE)
+```
+
+```{r}
+#SCALE TO STANDARDIZE
+#build SVM
+resultsSVM = svm(formula=as.factor(Choice) ~. - Observation - Last_purchase - First_purchase, data = BBBC_Train, gamma = tuned$best.parameters$gamma, cost = tuned$best.parameters$cost)
+```
+
+```{r}
+#make predictions
+predSVM <- predict(resultsSVM, BBBC_Test, type = "response")
+```
+
+
+```{r}
+caret::confusionMatrix(as.factor(predSVM), as.factor(BBBC_Test$Choice))
+# Findings & Comparisons Across Models
+```
+This last model had a high Accuracy with 89.96%, high Sensitivity with 96.2%, but low Specificity with 25%.
+The linear SVM model was the one that performed the best in all four SVM models.
+
+
+The three models that were run produced different results. As stated earlier, linear regression is not an appropriate prediction method due to a lack of linearity in the DV and due to it being a binary variable. The other two classification methods performed well, and had high accuracy and sensitivity, with specificity around 30%. Due to the large amount of "Purchasers" (1s), the data is heavily skewed to "Purchasers" (0) and therefore result in much higher sensitivity than specificity. The results of the Logistic Regression & SVM model are outlined below:
+
+*Logistic Regression*
+Accuracy: 89.5%
+Sensitivity: 94.5%
+Specificity: 37.3%
+
+*SVM Model Linear*
+Accuracy: 89.5%
+Sensitivity: 95%
+Specificity: 34.5%
+AUC: 78.5%
+
+*SVM Model Polynomial*
+Accuracy: 89.8%
+Sensitivity: 96.4%
+Specificity: 21.6%
+AUC: 74.41%
+
+*SVM Model Sigmoid*
+Accuracy: 70.75%
+Sensitivity: 82.42%
+Specificity: 35.75%
+AUC: 65.3%
+
+*SVM Model RBF*
+Accuracy: 90.78%
+Sensitivity: 98.04%
+Specificity: 25%
+
+
+Overall, the results are very similar except for Specificity, which is 2.8% higher for Logistic Regression. This means that the Logistic Regression is slightly better model for predicting both "Purchasers" & "Non-Purchasers". Both are classification models, and both are very good at predicting whether "Non-Purchasers" will buy "The History of Florence". Further analysis could be done on a sample with an even number of purchasers and non-purchasers to determine whether one model can predict "Purchasers" better than the other. 
+
+# SVM Balanced
+
+As mentioned earlier, the BBBC_Train & BBBC_Test data-sets contain a much larger number of "Non-Purchasers" than "Purchasers". This inequality leads to much lower specificity values that affect the overall accuracy of predicting "Purchasers" of "The History of Florence". To solve this, the training and testing sets will be split into samples with the same number of "Purchasers" (1) & "Non-Purchasers" (0):
+```{r}
+## Resample with more balanced data 
+df_ext_cust = BBBC_Train %>% filter(Choice == 0)
+df_att_cust = BBBC_Train %>% filter(Choice == 1)
+set.seed(1)
+sample_ext_cust = sample_n(df_ext_cust, nrow(df_att_cust)) # same number of purchasers and non-purchasers
+df_bal_tr = rbind(df_att_cust,sample_ext_cust)
+
+# Split data into one training set
+set.seed(1)
+tr_ind_bal <- sample(nrow(df_bal_tr),0.8*nrow(df_bal_tr),replace = F) # Setting training sample to be 80% of the data
+BBBC_Train_bal <- df_bal_tr
+table(BBBC_Train_bal$Choice)
+```
+```{r}
+## Resample with more balanced data 
+df_ext_cust = BBBC_Test %>% filter(Choice == 0)
+df_att_cust = BBBC_Test %>% filter(Choice == 1)
+set.seed(2)
+sample_ext_cust = sample_n(df_ext_cust, nrow(df_att_cust)) # same number of existing customers and attrited customers
+df_bal_t = rbind(df_att_cust,sample_ext_cust)
+
+# Split data into training and testing balanced samples
+set.seed(2)
+tr_ind_bal <- sample(nrow(df_bal_t),0.8*nrow(df_bal_t),replace = F) # Setting training sample to be 80% of the data
+BBBC_Test_bal <- df_bal_t
+table(BBBC_Test_bal$Choice)
+```
+
+Now that the data-sets are equally split, the SVM models will be executed to see how the accuracy, sensitivity, and specificity change in these conditions. First, the training model: 
+
+```{r}
+svm_train_bal <- svm(as.factor(Choice) ~. - Observation - Last_purchase - First_purchase, data = BBBC_Train_bal, kernel="polynomial")
+summary(svm_train)
+```
+This training model has a total of 774 support vectors, almost equally split at 385/389. 
+
+The confusion matrix of the model is below:
+
+```{r}
+pred_train_bal <- predict(svm_train_bal, BBBC_Train_bal)
+caret::confusionMatrix(as.factor(pred_train_bal), as.factor(BBBC_Train_bal$Choice))
+```
+Below are the results of the unbalanced and balanced training SVM results:
+
+Accuracy: 89.5% unbalanced vs. 75.4% balanced 
+Sensitivity: 95% unbalanced vs. 82% balanced
+Specificity: 34.5% unbalanced vs. 68.8% balanced
+
+The largest decline is in accuracy, with the balanced SVM suffering a drop of 14.1% in sensitivity, which could be attributed to a lower sensitivity and smaller sample size. Accuracy dropped by 13% for the balanced SVM, also a notable decline. However, specificity increased by 34.3%, a massive improvement. Since the model is attempting to predict "Purchasers" (1), this balanced SVM model is much more complete and more reliable in terms of predicting whether or not a customer is likely to purchase "The History of Florence".
+
+AUC Curve for training set:
+
+```{r}
+svm_train_prob_bal <- svm(as.factor(Choice) ~. - Observation - Last_purchase - First_purchase, data = BBBC_Train_bal, kernel="linear", probability = TRUE)
+pred_prob_bal <- predict(svm_train_prob_bal, newdata = BBBC_Train_bal, probability = TRUE)
+pred_prob <- attr(pred_prob_bal, "probabilities")[, 1]
+pred <- prediction(pred_prob, BBBC_Train_bal$Choice)
+perf <- performance(pred, "tpr", "fpr")
+plot(perf, colorize=TRUE)
+```
+```{r}
+unlist(slot(performance(pred, "auc"), "y.values"))
+```
+The AUC curve, which provides the probability that the model ranks a random positive example more highly than a random negative example, is quite high. It is even higher than the unbalanced SVM's AUC curve of 77.5%.
+
+
+Balanced Testing SVM
+```{r}
+pred_test_bal <- predict(svm_train_bal, BBBC_Test_bal)
+caret::confusionMatrix(as.factor(pred_test_bal), as.factor(BBBC_Test_bal$Choice))
+```
+The overall accuracy of the testing model is 73.5%. The comparison of accuracy, sensitivity, and specificity are below:
+
+Accuracy: 73.5% balanced testing vs. 75.4% balanced training vs. 89.5% unbalanced testing
+Sensitivity: 82.8% balanced testing vs. 82% balanced training vs. 95% unbalanced testing
+Specificity: 64.2% balanced testing vs. 68.8% balanced training vs. 33.3% unbalanced testing
+
+Compared against the balanced training set, the results vary slightly in accuracy, with a decline of 1.9% in the testing set. Sensitivity increased by 0.8%, and specificity actually declined by ~4%. A lot of these changes may be due to the decline in sample size, since the BBBC_Train_bal has 800 samples, while the BBBC_Test_bal has 408. Overall, the results are still high and reveal the model is accurate in all 3 categories, and more balanced in terms of accuracy, sensitivity, and specificity than the unbalanced SVM models
+
+```{r}
+pred_prob_t_bal <- predict(svm_train_prob_bal, newdata = BBBC_Test_bal, probability = TRUE)
+pred_prob_t_bal <- attr(pred_prob_t_bal, "probabilities")[, 1]
+pred <- prediction(pred_prob_t_bal, BBBC_Test_bal$Choice)
+perf <- performance(pred, "tpr", "fpr")
+plot(perf, colorize=TRUE)
+```
+```{r}
+unlist(slot(performance(pred, "auc"), "y.values"))
+```
+
+The AUC curve of the testing set, higher than the 78.1% for the training set, reveals that the model is very accurate. 
+
+# Findings & Comparisons Across Models
+
+The three models that were run produced different results. As stated earlier, linear regression is not an appropriate prediction method due to a lack of linearity in the DV and due to it being a binary variable. The other two classification methods performed well, and had high accuracy and sensitivity, with specificity around 30%. Due to the large amount of "Purchasers" (1s), the data is heavily skewed to "Purchasers" (0) and therefore result in much higher sensitivity than specificity. The results of the Logistic Regression & SVM model are outlined below:
+
+*Logistic Regression*
+Accuracy: 89.5%
+Sensitivity: 94.5%
+Specificity: 37.3%
+
+*Balanced Logistic Regression*
+Accuracy: 74%
+Sensitivity: 82.4%
+Specificity: 65.7%
+
+*SVM Model Linear Unbalanced*
+Accuracy: 89.5%
+Sensitivity: 95%
+Specificity: 34.5%
+AUC: 78.5%
+
+*SVM Model Balanced*
+Accuracy: 73.5%
+Sensitivity: 82.8%
+Specificity: 64.2%
+AUC: 81.6%
+
+
+Overall, all 3 models are very accurate, with accuracy never dropping below 70%. When taking a detailed view, there are vast differences between the 3 models, notably in specificity. A main concern with the Logistic Regression & Unbalanced SVM Models is that there are a much higher number of "Non-Purchasers" than "Purchasers" in the training and testing data-sets. This is exactly why accuracy and sensitivity are so high, since the model can predict "Non-Purchasers" with near perfect accuracy, since there are so many of them! However, "Purchasers" are just as, if not more important for the predictions. In the end, the "Purchasers" are driving the revenue of "The History of Florence", and they're the target audience for these predictive models. In that regard, the Balanced SVM model beats the two other models, with a much higher specificity of 64.2%. It's possible that collecting more data on "Purchasers" could increase this figure above 70%, but currently it is still much better than the 30%-35% range obtained by the Unbalanced SVM & Logistic Regression. When comparing both Balanced models, the Logistic Regression is slightly better, edging out the SVM model in every category except Sensitivity, but only by 0.8%. If the goal is to find the best and most balanced model, the Balanced Logistic Regression provides the best results.
+
+# Testing data-set Profitability Analysis
+
+This report will also seek to answer the following question: "How much more profit could the company expect to make by using these models as opposed to sending the mail offer to the entire mailing list?" The question addresses the notion that it could be either more or less profitable to use the model to target predicted "Purchasers" of "The History of Florence" than to simply send the mailing list to everyone on the list and see what happens, even if the model would predict them to be "Non-Purchasers" of the book. Before answering this question, notable data should be recorded:
+```{r}
+mailing_price <- 0.65
+book_cost <- 15
+overhead <- .45 * book_cost
+book_price <- 31.95
+```
+
+`mailing_price` is the mailing cost per addressee, so it costs $0.65 to send the mailing list to each addressee
+`book_cost` is the cost of purchasing and mailing the book
+`overhead` is applied to each book, and it is 45% of the cost of each book
+`book_price` is the retail price of the book
+
+To solve this question, potential revenue & costs will be calculated for the number of predicted purchasers in both the Logistic Regression & SVM models. The total profit of each individual model will be compared against the result of simply mailing the list out to everyone in the testing sample, assuming that 9.06% of customers buy the book:
+
+```{r}
+customers_mailed <- 2300
+orders_rec <- round(customers_mailed*0.0906,0)
+yield <- 0.0906
+mailing_costs <- customers_mailed*mailing_price
+book_costs <- (orders_rec * book_cost) + (orders_rec * overhead)
+revenue <- book_price * orders_rec
+profit <- revenue - book_costs - mailing_costs
+print(paste("Total revenue from the 1,806 book purchases was: $",round(revenue,2)))
+print(paste("The total costs to send the mailing list and purchase/send the book were: $", round(book_costs+mailing_costs,2)))
+print(paste("Total profit was: $",round(profit,2)))
+print(paste("The success of the campaign is", round(yield,2)))
+```
+
+Ultimately, the profit is subjective due to the difference in sample sizes. However, one important metric will be the % of customers that actually bought the book. In the case of the base model, it is 9.06%. Ratios higher than this for the SVM and/or Logistic Regression models would be considered a success.
+
+# Balanced Logistic Regression Profitability
+
+Firstly, the Balanced Logistic Regression model will be analyzed. Below is the confusion matrix for the testing Logistic Regression model:
+```{r}
+caret::confusionMatrix(as.factor(predictions_logb), as.factor(BBBC_Test_bal$Choice))
+```
+Of the 408 people in the sample, 168 are true "Non-Purchasers". There is no need to spend money mailing these customers the mailing list, since there is no chance they would purchase the book. 70 of customers in the model were classified as "false negatives", which means that the model predicts them to be "Non-Purchasers" when in reality they did purchase "The History of Florence". These clients should be sent the mailing list, since there is a very real chance that they could purchase the book. Lastly, 134 clients were correctly predicted as "Purchasers". These clients must be on the mailing list. Let's calculate the metrics for the Logistic Regression:
+```{r}
+customers_mailed <- 134+70
+orders_rec <- 134
+yield <- orders_rec/customers_mailed
+mailing_costs <- customers_mailed*mailing_price
+book_costs <- (orders_rec * book_cost) + (orders_rec * overhead)
+revenue <- book_price * orders_rec
+profit <- revenue - book_costs - mailing_costs
+print(paste("Total revenue from the 134 book purchases was: $",round(revenue,2)))
+print(paste("The total costs to send the mailing list and purchase/send the book were: $", round(book_costs+mailing_costs,2)))
+print(paste("Total profit was: $",round(profit,2)))
+print(paste("The success of the campaign is", round(yield,2)))
+```
+Of the 204 customers that received the mailing list, 134 ended up purchasing "The History of Florence" based on the model. Let's compare key metrics against the base model:
+
+Revenue: $6,645.6 base vs. $4,281.3 Log
+Total Costs: $6,019 base vs. $3,047.1
+Profit: $626.6 base vs. $1,234.2 Log
+Success Rate: 9.06% base vs 66% Log
+
+Overall, the Logistic Regression is more profitable than the base case model of sending everyone the mailing list. Total costs are 97.5% lower for the Logistic Regression model, and profit is 49.2% higher. Even though revenue is much higher in the base case, the benefit of this is erased by the high mailing and book costs. Also, the success rate of 66% for the Logistic Regression is 628.5% higher, which could provide even higher profits with a larger sample and/or in the population.
+
+# Balanced SVM Model Profitability 
+
+Now for the Balanced SVM Model. Once again, the confusion matrix must be analyzed for the linear kernel SVM, which provided the best results:
+```{r}
+caret::confusionMatrix(as.factor(pred_test_bal), as.factor(BBBC_Test_bal$Choice))
+```
+The SVM model correctly classifies 169 customers as non-purchasers, and so they will not be sent the mailing list. There are 73 false-negatives, people whom the model said would NOT purchase "The History of Florence" but actually did. 131 people were correctly predicted as purchasers of the book. Overall, 204 people should be sent the mailing list to optimize the results. Let's analyze costs and revenue for the SVM Model:
+```{r}
+customers_mailed <- 204
+orders_rec <- 131
+yield <- orders_rec/customers_mailed
+mailing_costs <- customers_mailed*mailing_price
+book_costs <- (orders_rec * book_cost) + (orders_rec * overhead)
+revenue <- book_price * orders_rec
+profit <- revenue - book_costs - mailing_costs
+print(paste("Total revenue from the 1,806 book purchases was: $",round(revenue,2)))
+print(paste("The total costs to send the mailing list and purchase/send the book were: $", round(book_costs+mailing_costs,2)))
+print(paste("Total profit was: $",round(profit,2)))
+print(paste("The success of the campaign is", round(yield,2)))
+```
+This is how the results compare against the base case:
+
+Revenue: $6,645.6 base vs. $4,185.5 SVM
+Total Costs: $6,019 base vs. $2,981.9 SVM
+Profit: $626.6 base vs. $1,203.6 SVM
+Success Rate: 9.06% base vs 64% SVM
+
+Overall, profit is 92% higher with the Balanced SVM than for the base case, a massive improvement. The success rate of 64% is very comparable to the 66% success rate of the Logistic Regression mode. Costs decreased by 37% against the base case, and revenue decreased by 37% against the base case, but the decline in revenue is offset by the decrease in costs. Overall, the SVM model is much better than the base case model. 
+Logistic & SVM Profitability Comparison:
+
+*Revenue*
+$4,185.5 SVM vs. $4,281.3 Log
+*Costs*
+$2,981.9 SVM vs. $3,047.1 Log
+*Profit*
+$1,203.6 SVM vs $1,234.2 Log
+*Success Rate*
+64% SVM vs 66% Log
+*Orders Placed*
+131 SVM vs 134 Log
+
+# Best Profitability Model
+
+Overall, the Logistic Regression model is the best at delivering higher profit and a higher success rate. Even though costs increased for the Logistic Regression model, this is offset by higher profits and a higher success rate.
+
+# Best Predictors
+
+# Assumptions and Limitations
+
+SVM models are extremely versatile classification models. SVM has various advantages:
+
+* Effective on data-sets with multiple features
+* Effective in data-sets where number of features > number of observations
+* Can leverage different kernels for data that is not linear
+
+However, they do have some limitations and disadvantages:
+
+* Model is hard to interpret due to the inability of providing probabilities
+* Works best on smaller data-sets due to its high training time
+* Can be computationally expensive to run for large and complex data-sets
+
+
+Logistic regression is a popular method for binary classification problems. It has several advantages:
+
+* Interpretability: One of the main strengths of logistic regression is its interpretability. Coefficients can be directly related to the odds ratio for each of the predictors, making it easier to understand the impact of each variable.
+* Probability Estimates: Unlike some other classification methods, logistic regression provides probabilities for the outcomes, allowing for a nuanced understanding of the predictions.
+* Simplicity and Efficiency: Logistic regression is straightforward to implement and computationally not as demanding as more complex models, making it a good baseline model for binary classification problems.
+* Flexibility with Feature Transformation: It can handle both linear and non-linear effects using transformations or interaction terms.
+
+Despite its advantages, logistic regression comes with limitations and disadvantages:
+
+* Assumption of Linearity: Logistic regression assumes a linear relationship between the log-odds of the dependent variable and each predictor variable. This can be overly simplistic for some real-world scenarios where the relationship is not linear.
+* Performance with Complex Relationships: It may not perform well when there are complex relationships between features that are difficult to capture with linear boundaries or when the data is highly dimensional without regularization.
+* Vulnerability to Over-fitting: In cases where the data-set includes a large number of features, logistic regression can become prone to overfitting, although techniques like regularization can help mitigate this.
+Sensitive to Imbalanced Data: Logistic regression can be sensitive to unbalanced data, leading to biased models that favor the majority class. Special techniques like oversampling, under-sampling, or penalization methods are often required to handle this issue.
+
+
+Linear regression is primarily used for predicting the value of a continuous dependent variable based on one or more predictor variables. The method assumes a linear relationship between the independent and dependent variables, and it estimates the dependent variable as a weighted sum of the independent variables, plus an intercept.
+
+When you have a binary dependent variable (e.g., 0 or 1, representing categories like "no" or "yes," "fail" or "pass"), using linear regression can lead to several issues:
+
+Non-linearity: The assumption of linearity is violated when the outcome variable is binary. The relationship between the predictor(s) and the probability of the outcome being 1 (or 0) is not linear but S-shaped when plotted on a graph (logistic function). Therefore, the linear model does not fit the data well.
+
+Prediction outside of bounds: Linear regression predictions can fall outside the range of 0 and 1, which doesn't make sense for binary outcomes because probabilities must be between 0 and 1.
+
+Homoscedasticity violation: Linear regression assumes that the variance of the error terms is constant across all levels of the independent variables. However, for a binary dependent variable, the variance of the error terms is not constant and depends on the predicted probability, leading to heteroscedasticity.
+
+Error distribution: Linear regression assumes that the residuals (errors) are normally distributed. But with a binary dependent variable, the error distribution can deviate significantly from normality, especially since the outcome can only take on two values.
+
+Because of these reasons, logistic regression is typically used when the dependent variable is binary. Logistic regression models the probability that the dependent variable belongs to a particular category. Unlike linear regression, logistic regression does not assume a linear relationship between the independent and dependent variables. It uses the logistic function to ensure that the predictions fall between 0 and 1, making it suitable for binary (and categorical) outcomes.
+
+SVM models are extremely versatile classification models. SVM has various advantages:
+
+* Effective on data-sets with multiple features
+* Effective in data-sets where number of features > number of observations
+* Can leverage different kernels for data that is not linear
+
+However, they do have some limitations and disadvantages:
+
+* Model is hard to interpret due to the inability of providing probabilities
+* Works best on smaller data-sets due to its high training time
+* Can be computationally expensive to run for large and complex data-sets
+
+Logistic regression is a popular method for binary classification problems. It has several advantages:
+
+Interpretability: One of the main strengths of logistic regression is its interpretability. Coefficients can be directly related to the odds ratio for each of the predictors, making it easier to understand the impact of each variable.
+Probability Estimates: Unlike some other classification methods, logistic regression provides probabilities for the outcomes, allowing for a nuanced understanding of the predictions.
+Simplicity and Efficiency: Logistic regression is straightforward to implement and computationally not as demanding as more complex models, making it a good baseline model for binary classification problems.
+Flexibility with Feature Transformation: It can handle both linear and non-linear effects using transformations or interaction terms.
+Despite its advantages, logistic regression comes with limitations and disadvantages:
+
+Assumption of Linearity: Logistic regression assumes a linear relationship between the log-odds of the dependent variable and each predictor variable. This can be overly simplistic for some real-world scenarios where the relationship is not linear.
+Performance with Complex Relationships: It may not perform well when there are complex relationships between features that are difficult to capture with linear boundaries or when the data is highly dimensional without regularization.
+Vulnerability to Overfitting: In cases where the dataset includes a large number of features, logistic regression can become prone to overfitting, although techniques like regularization can help mitigate this.
+Sensitive to Imbalanced Data: Logistic regression can be sensitive to unbalanced data, leading to biased models that favor the majority class. Special techniques like oversampling, undersampling, or penalization methods are often required to handle this issue.
+
+Linear regression is a widely used statistical method for modeling the relationship between a dependent variable and one or more independent variables. It has several advantages:
+
+* Simplicity and Interpretability: Linear regression models are straightforward to understand and interpret, making them attractive for predictive analysis where the relationship between variables is to be understood and communicated.
+* Efficiency: They are computationally efficient, allowing for quick model training even with very large datasets.
+* Continuous Data: Linear regression is well-suited for predicting outcomes that are continuous and can range across a wide spectrum.
+* Basis for Other Models: It serves as the foundation for understanding more complex models. Linear regression techniques are often a stepping stone to more sophisticated algorithms.
+Despite its advantages, linear regression comes with limitations and disadvantages:
+
+* Assumption of Linearity: The biggest limitation is the assumption of a linear relationship between the dependent and independent variables. This can be overly simplistic for real-world problems where the relationship may not be linear.
+* Outlier Sensitivity: Linear regression models are sensitive to outliers. A few extreme values can significantly affect the slope and intercept of the regression line, leading to poor model performance.
+* Homoscedasticity Assumption: Another assumption is that of homoscedasticity, meaning the residuals (differences between observed and predicted values) are assumed to have constant variance across all levels of the independent variables. In practice, this assumption is often violated.
+* Independence of Errors: The model assumes that the errors of the response variables are uncorrelated with each other. In time series data, this assumption is often violated due to autocorrelation.
+* Limited to Linear Relationships: By definition, linear regression can only capture linear relationships, making it unsuitable for datasets with complex, nonlinear relationships between variables unless transformations are applied to the data.
+
+In summary, while linear regression offers an accessible and efficient way to model relationships between variables, its simplicity can be a drawback when dealing with more complex, nonlinear data structures and relationships.
+
